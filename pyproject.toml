@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-operator"
+version = "0.1.1"
+description = "Memory-first autonomous operator platform with safe-by-default governance."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Autonomous Operator Contributors" }]
+dependencies = [
+  "typer>=0.12,<1.0",
+  "pydantic>=2.5,<3.0",
+  "SQLAlchemy>=2.0,<3.0",
+  "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0",
+  "ruff>=0.6,<1.0",
+  "black>=24.8,<25.0",
+  "mypy>=1.11,<2.0",
+  "types-PyYAML>=6.0.12.20240917",
+]
+vision = ["Pillow>=10.0,<12.0", "pytesseract>=0.3,<0.4"]
+os = ["pyautogui>=0.9,<1.0"]
+api = ["openai>=1.0,<2.0"]
+vector = ["faiss-cpu>=1.7,<2.0"]
+
+[project.scripts]
+ao = "ui.cli.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "core*",
+  "cognition*",
+  "llm*",
+  "vision*",
+  "os_controller*",
+  "memory*",
+  "world_model*",
+  "planner*",
+  "executor*",
+  "tools*",
+  "governance*",
+  "ui*",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E203"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+ignore_missing_imports = true
+exclude = [
+  "workspace/",
+  "logs/",
+]
+
+[[tool.mypy.overrides]]
+module = ["PIL", "PIL.*", "pytesseract", "openai", "pyautogui", "torch"]
+ignore_missing_imports = true

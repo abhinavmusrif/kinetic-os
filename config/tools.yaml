@@ -1,0 +1,16 @@
+tools:
+  mock_tool:
+    enabled: true
+  file_tool:
+    enabled: true
+    allow_delete: false
+    allow_outside_workspace: false
+  shell_tool:
+    enabled: false
+    require_confirmation: true
+  browser_tool:
+    enabled: false
+    require_confirmation: true
+  git_tool:
+    enabled: false
+    require_confirmation: true

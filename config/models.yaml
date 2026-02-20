@@ -1,0 +1,16 @@
+llm:
+  active_provider: mock
+  providers:
+    mock:
+      type: mock
+    openai:
+      type: openai
+      model: gpt-4o-mini
+    ollama:
+      type: ollama
+      model: llama3.1
+
+vision:
+  active_vlm: mock
+  vlm_enabled: false
+  ocr_enabled: true

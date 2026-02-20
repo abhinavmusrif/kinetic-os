@@ -1,0 +1,19 @@
+app:
+  name: autonomous-operator
+  version: 0.1.1
+  safe_mode: true
+
+paths:
+  workspace_dir: workspace
+  db_path: workspace/ao.db
+  audit_log_path: logs/audit.jsonl
+
+memory:
+  context_buffer_limit: 30
+  retrieval_limit: 5
+  retention_days: 30
+
+runtime:
+  enable_vector_store: false
+  enable_vlm: false
+  enable_ocr: true

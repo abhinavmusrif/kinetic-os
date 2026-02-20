@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  operator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autonomous-operator
+    command: ["ao", "run-goal", "Remember I love lo-fi music and summarize it into my preferences"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AO_DB_PATH=workspace/ao.db
+      - AO_WORKSPACE_DIR=workspace
+      - AO_AUDIT_LOG_PATH=logs/audit.jsonl
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    restart: "no"
+
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: autonomous-operator-chroma
+    profiles: ["vector"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+volumes:
+  chroma_data:

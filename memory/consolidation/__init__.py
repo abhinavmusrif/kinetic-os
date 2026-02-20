@@ -1,0 +1,1 @@
+"""Consolidation pipeline package."""
