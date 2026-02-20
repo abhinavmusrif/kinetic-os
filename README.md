@@ -1,3 +1,11 @@
+![License](https://img.shields.io/github/license/abhinavmusrif/kinetic-os)
+
+![Stars](https://img.shields.io/github/stars/abhinavmusrif/kinetic-os)
+
+![Issues](https://img.shields.io/github/issues/abhinavmusrif/kinetic-os)
+
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+
 # Kinetic-OS: The Human-Kinetic Autonomous Operator
 
 **Kinetic-OS** is a high-performance, memory-first autonomous operator platform designed for native Windows environments. It enables AI agents to "see" and "act" at human speed by bypassing slow vision-only loops in favor of a proprietary **Spatial UI Mapping** engine.
