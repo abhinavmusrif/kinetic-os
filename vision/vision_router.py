@@ -1,4 +1,9 @@
-"""Vision router selecting VLM or OCR fallback."""
+"""Vision router selecting VLM or OCR fallback.
+
+When vlm_enabled is true in config AND the GROQ_API_KEY is set, uses the
+real GroqVisionProvider (llama-3.2-90b-vision-preview). If the VLM call
+fails or times out, falls back to OCR transparently.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,8 @@ from typing import Any
 from vision.base_vision import BaseVisionProvider
 from vision.ocr.ocr_engine import OCREngine
 from vision.ocr.tesseract_provider import TesseractProvider
-from vision.vlm.mock_vlm_provider import MockVLMProvider
+
+logger = logging.getLogger("ao.vision")
 
 
 class OCRProvider(BaseVisionProvider):
@@ -27,45 +33,75 @@ class OCRProvider(BaseVisionProvider):
 
 
 class VisionRouter:
-    """Choose vision backend based on config and availability."""
+    """Choose vision backend based on config and availability.
+
+    Priority order:
+    1. GroqVisionProvider (real VLM) — if vlm_enabled and GROQ_API_KEY set
+    2. MockVLMProvider — if vlm_enabled but no API key (deterministic fallback)
+    3. TesseractProvider / OCRProvider — always-available OCR fallback
+    """
 
     def __init__(self, config: dict[str, Any]) -> None:
-        self.logger = logging.getLogger("ao.vision")
         models_cfg = config.get("models", {}).get("vision", {})
         runtime_cfg = config.get("runtime", {})
-        self.vlm_enabled = bool(models_cfg.get("vlm_enabled", runtime_cfg.get("enable_vlm", False)))
-        self.ocr_enabled = bool(models_cfg.get("ocr_enabled", runtime_cfg.get("enable_ocr", True)))
+        self.vlm_enabled = bool(
+            models_cfg.get("vlm_enabled", runtime_cfg.get("enable_vlm", False))
+        )
+        self.ocr_enabled = bool(
+            models_cfg.get("ocr_enabled", runtime_cfg.get("enable_ocr", True))
+        )
 
-        self.vlm_provider: BaseVisionProvider = MockVLMProvider()
+        # --- VLM provider selection ---
+        self.vlm_provider: BaseVisionProvider | None = None
+        if self.vlm_enabled:
+            self.vlm_provider = self._build_vlm_provider()
+
+        # --- OCR provider (always available as fallback) ---
         self.ocr_provider: BaseVisionProvider = (
             TesseractProvider() if self.ocr_enabled else OCRProvider()
         )
 
+    @staticmethod
+    def _build_vlm_provider() -> BaseVisionProvider:
+        """Attempt to instantiate the real Groq VLM; fall back to Mock."""
+        try:
+            from vision.vlm.groq_vision_provider import GroqVisionProvider
+
+            provider = GroqVisionProvider()
+            if provider.is_available():
+                logger.info(
+                    "GroqVisionProvider active (model=%s)", provider.model
+                )
+                return provider
+            logger.warning(
+                "GroqVisionProvider not available (missing API key or openai). "
+                "Falling back to MockVLMProvider."
+            )
+        except Exception as exc:
+            logger.warning("Failed to load GroqVisionProvider: %s", exc)
+
+        from vision.vlm.mock_vlm_provider import MockVLMProvider
+
+        return MockVLMProvider()
+
     def analyze(self, image_path: Path, prompt: str | None = None) -> str:
-        """Route request to VLM when enabled/available, otherwise OCR fallback."""
-        if self.vlm_enabled and isinstance(self.vlm_provider, MockVLMProvider):
-            self.logger.info("Using mock VLM provider (no GPU required).")
-            return self.vlm_provider.analyze(image_path=image_path, prompt=prompt)
+        """Route request to VLM first, fall back to OCR on any failure."""
+        # --- Try VLM first ---
+        if self.vlm_enabled and self.vlm_provider is not None:
+            try:
+                result = self.vlm_provider.analyze(
+                    image_path=image_path, prompt=prompt
+                )
+                logger.info("VLM analysis succeeded")
+                return result
+            except Exception as exc:
+                logger.warning(
+                    "VLM analysis failed — falling back to OCR: %s", exc
+                )
 
-        if self.vlm_enabled and not self._gpu_available():
-            self.logger.warning("VLM enabled but no GPU detected. Falling back to OCR.")
-
-        if self.vlm_enabled and self._gpu_available() and self.vlm_provider.is_available():
-            return self.vlm_provider.analyze(image_path=image_path, prompt=prompt)
-
-        if self.vlm_enabled:
-            self.logger.warning("VLM unavailable. Falling back to OCR.")
+        # --- OCR fallback ---
         if self.ocr_provider.is_available():
             return self.ocr_provider.analyze(image_path=image_path, prompt=prompt)
-        self.logger.warning("OCR provider unavailable. Falling back to internal OCR engine.")
+
+        logger.warning("OCR provider unavailable. Using internal OCR engine.")
         return OCRProvider().analyze(image_path=image_path, prompt=prompt)
-
-    @staticmethod
-    def _gpu_available() -> bool:
-        """Best-effort GPU detection."""
-        try:
-            import torch
-
-            return bool(torch.cuda.is_available())
-        except Exception:
-            return False

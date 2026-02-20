@@ -62,7 +62,18 @@ class WindowManager:
                 return False
             window = windows[0]
             if not window.isActive:
-                window.activate()
+                try:
+                    window.activate()
+                except Exception:
+                    pass
+                import time
+                time.sleep(0.2)
+                if not window.isActive:
+                    import ctypes
+                    hwnd = getattr(window, "_hWnd", None)
+                    if hwnd:
+                        ctypes.windll.user32.ShowWindow(hwnd, 5)
+                        ctypes.windll.user32.SetForegroundWindow(hwnd)
             return True
         except Exception as e:
             self.logger.warning("Failed to focus window containing '%s': %s", title_substring, e)
@@ -71,3 +82,13 @@ class WindowManager:
     def bring_to_front(self, title_substring: str) -> bool:
         """Alias for focus_window for compatibility."""
         return self.focus_window(title_substring)
+
+    def open_app(self, cmd: str) -> bool:
+        """Launch an application."""
+        import subprocess
+        try:
+            subprocess.Popen(cmd, shell=True)
+            return True
+        except Exception as e:
+            self.logger.warning("Failed to open app '%s': %s", cmd, e)
+            return False

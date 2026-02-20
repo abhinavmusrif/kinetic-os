@@ -19,10 +19,13 @@ def test_memory_db_create_and_crud(tmp_path: Path) -> None:
     memory = build_memory(tmp_path)
 
     episode = memory.add_episode(
+        text="User asked for preference storage.",
+        structured_json={},
+        source="test",
+        outcome="stored",
         summary="User asked for preference storage.",
         raw_context_refs=["test"],
         actions_taken=["mock_action"],
-        outcome="stored",
         evidence_refs=["abc123"],
         confidence=0.8,
         tags=["test"],
@@ -30,20 +33,16 @@ def test_memory_db_create_and_crud(tmp_path: Path) -> None:
     )
     assert episode["id"] > 0
 
-    belief = memory.add_belief(
+    claim = memory.upsert_semantic_claim(
         claim="User likely likes lo-fi music",
         confidence=0.72,
-        status="proposed",
-        supporting_episode_ids=[episode["id"]],
-        scope="user_preferences",
+        support_episode_ids=[str(episode["id"])],
     )
-    assert belief["claim"].startswith("User likely likes")
-    assert belief["status"] == "proposed"
+    assert claim["claim"].startswith("User likely likes")
 
     goal = memory.add_goal(
         goal_text="Remember music preference",
-        progress_state="active",
-        completion_criteria="Belief exists",
+        progress_json={"state": "active"},
     )
     assert goal["goal_text"] == "Remember music preference"
 

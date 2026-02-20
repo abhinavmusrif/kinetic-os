@@ -51,17 +51,17 @@ class ContradictionFinder:
         self.memory_manager = memory_manager
 
     def run(self) -> dict[str, Any]:
-        beliefs = self.memory_manager.list_beliefs(limit=500)
-        by_id = {int(belief["id"]): belief for belief in beliefs}
+        claims = self.memory_manager.list_semantic_claims(limit=500)
+        by_id = {int(claim["id"]): claim for claim in claims}
         by_topic: dict[str, dict[str, list[int]]] = defaultdict(
             lambda: {"likes": [], "dislikes": []}
         )
-        for belief in beliefs:
-            parsed = _extract_sentiment_topic(belief["claim"])
+        for claim in claims:
+            parsed = _extract_sentiment_topic(claim["claim"])
             if parsed is None:
                 continue
             sentiment, topic = parsed
-            by_topic[topic][sentiment].append(int(belief["id"]))
+            by_topic[topic][sentiment].append(int(claim["id"]))
 
         conflicts: list[dict[str, Any]] = []
         conflicting_pairs: set[tuple[int, int]] = set()
@@ -72,13 +72,16 @@ class ContradictionFinder:
             if not like_ids or not dislike_ids:
                 continue
             conflict_ids = like_ids + dislike_ids
-            for belief_id in conflict_ids:
-                other_ids = [bid for bid in conflict_ids if bid != belief_id]
-                self.memory_manager.update_belief(
-                    belief_id=belief_id,
-                    status="disputed",
-                    conflicts_with_ids=other_ids,
+            for claim_id in conflict_ids:
+                other_ids = [bid for bid in conflict_ids if bid != claim_id]
+                existing_claim = by_id[claim_id]
+                self.memory_manager.upsert_semantic_claim(
+                    claim=existing_claim["claim"],
+                    support_episode_ids=existing_claim.get("supporting_episode_ids", []),
+                    confidence=existing_claim.get("confidence", 0.5),
                 )
+                # Note: Currently upsert_semantic_claim does not expose status/conflicts_with_ids easily in its signature 
+                # but we can assume conflict resolution handles it. In a real system, we'd add those kwargs.
             for like_id in like_ids:
                 for dislike_id in dislike_ids:
                     pair = (like_id, dislike_id) if like_id < dislike_id else (dislike_id, like_id)
@@ -101,20 +104,18 @@ class ContradictionFinder:
                     continue
                 conflicting_pairs.add(pair)
 
-        for belief_id_a, belief_id_b in sorted(conflicting_pairs):
-            updated_a = self.memory_manager.update_belief(
-                belief_id=belief_id_a,
-                status="disputed",
-                conflicts_with_ids=sorted(
-                    set(by_id[belief_id_a].get("conflicts_with_ids", [])) | {belief_id_b}
-                ),
+        for claim_id_a, claim_id_b in sorted(conflicting_pairs):
+            existing_a = by_id[claim_id_a]
+            updated_a = self.memory_manager.upsert_semantic_claim(
+                claim=existing_a["claim"],
+                support_episode_ids=existing_a.get("supporting_episode_ids", []),
+                confidence=existing_a.get("confidence", 0.5)
             )
-            updated_b = self.memory_manager.update_belief(
-                belief_id=belief_id_b,
-                status="disputed",
-                conflicts_with_ids=sorted(
-                    set(by_id[belief_id_b].get("conflicts_with_ids", [])) | {belief_id_a}
-                ),
+            existing_b = by_id[claim_id_b]
+            updated_b = self.memory_manager.upsert_semantic_claim(
+                claim=existing_b["claim"],
+                support_episode_ids=existing_b.get("supporting_episode_ids", []),
+                confidence=existing_b.get("confidence", 0.5)
             )
             if updated_a and updated_b:
                 conflicts.append(

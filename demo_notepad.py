@@ -1,7 +1,16 @@
 import time
 from os_controller.windows_controller import WindowsController
 
+import os
+import sys
+
 def run_demo() -> None:
+    if sys.platform != "win32":
+        print("Skipping GUI demo: Not running on Windows.")
+        return
+    if os.environ.get("AO_ENABLE_UI_TESTS", "0") != "1":
+        print("Skipping GUI demo: AO_ENABLE_UI_TESTS=1 not set.")
+        return
     print("Starting Windows Controller demo...")
     wc = WindowsController(allow_os_automation=True)
     

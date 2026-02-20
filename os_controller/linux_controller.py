@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from os_controller.base_controller import BaseController
+from os_controller.base_controller import BaseController, TaskResult
 from vision.screen_capture import capture_screen
 
 
@@ -53,3 +53,12 @@ class LinuxController(BaseController):
     def list_windows(self) -> list[dict[str, Any]]:
         self._ensure_allowed()
         return []
+
+    def execute_task(self, task: dict[str, Any]) -> TaskResult:
+        self._ensure_allowed()
+        return {
+            "success": False,
+            "steps": ["Linux controller does not support structured OS tasks."],
+            "last_hash": None,
+            "reason": "UNSUPPORTED"
+        }

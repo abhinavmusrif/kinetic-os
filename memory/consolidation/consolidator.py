@@ -20,14 +20,53 @@ class Consolidator:
         self.forgetting = ForgettingPolicy(memory_manager=memory_manager)
         self.pattern_miner = PatternMiner()
 
-    def run(self) -> dict[str, Any]:
-        replay_result = self.replay_engine.run()
-        contradiction_result = self.contradiction_finder.run()
-        forgetting_result = self.forgetting.run()
-        patterns = self.pattern_miner.mine(self.memory_manager.list_episodes(limit=200))
-        return {
-            "replay": replay_result,
-            "contradictions": contradiction_result,
-            "forgetting": forgetting_result,
-            "patterns": patterns,
-        }
+    def run(self, mode: str = "light") -> dict[str, Any]:
+        """Run consolidation cycle.
+        
+        Light mode: 
+        - Propose minimal claims using heuristics.
+        - Detect and resolve conflicts.
+        
+        Deep mode: 
+        - Replay recent episodes (summarize semantics).
+        - Extract procedures from successful sequences.
+        - Run forgetting policy (pruning).
+        - Mine patterns.
+        """
+        results: dict[str, Any] = {"mode": mode}
+        recent_episodes = self.memory_manager.list_episodes(limit=50)
+        
+        if mode == "light":
+            # 1. Propose semantic claims
+            new_claims = self.memory_manager.propose_semantic_claims(recent_episodes, llm_optional=True)
+            results["proposed_claims_count"] = len(new_claims)
+            
+            # 2. Detect and resolve conflicts
+            conflicts = self.memory_manager.detect_conflicts(new_claims)
+            if conflicts:
+                self.memory_manager.resolve_conflicts(conflicts)
+            results["conflicts_resolved"] = len(conflicts)
+            
+        elif mode == "deep":
+            # 1. Replay via engine
+            replay_result = self.replay_engine.run()
+            results["replay"] = replay_result
+            
+            # 2. Extract procedures from successes
+            successful_eps = [ep for ep in recent_episodes if ep.get("outcome") == "success"]
+            procedures = self.memory_manager.extract_procedures_from_success(successful_eps, llm_optional=True)
+            results["procedures_extracted"] = len(procedures)
+            
+            # 3. Contradiction finding (across all memory)
+            contradiction_result = self.contradiction_finder.run()
+            results["contradictions"] = contradiction_result
+            
+            # 4. Pattern Mining
+            patterns = self.pattern_miner.mine(self.memory_manager.list_episodes(limit=200))
+            results["patterns"] = patterns
+            
+            # 5. Forgetting / pruning old/unimportant episodes
+            forgetting_result = self.forgetting.run()
+            results["forgetting"] = forgetting_result
+            
+        return results

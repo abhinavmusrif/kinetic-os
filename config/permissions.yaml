@@ -1,6 +1,6 @@
 allow_shell: false
-allow_file_write_outside_workspace: false
-allow_os_automation: false
+allow_file_write_outside_workspace: true
+allow_os_automation: true
 allow_network: false
 require_confirmation_for:
   - cloud_deploy

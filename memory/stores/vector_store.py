@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Iterable
+from typing import Any
 
 
 def _tokenize(text: str) -> list[str]:
@@ -29,7 +30,7 @@ class VectorStore:
     """In-memory vector similarity index with optional FAISS."""
 
     def __init__(self) -> None:
-        self._items: dict[str, tuple[dict[str, object], Counter[str]]] = {}
+        self._items: dict[str, tuple[dict[str, Any], Counter[str]]] = {}
         self._faiss = None
         try:
             import faiss
@@ -38,26 +39,27 @@ class VectorStore:
         except Exception:
             self._faiss = None
 
-    def add(self, item_id: str, text: str, payload: dict[str, object]) -> None:
+    def add(self, item_id: str, text: str, payload: dict[str, Any]) -> None:
         """Add or update item in fallback index."""
         self._items[item_id] = (payload, _sparse_embedding(text))
 
-    def search(self, query: str, limit: int = 5) -> list[dict[str, object]]:
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """Search similar items using cosine over sparse embeddings."""
         query_emb = _sparse_embedding(query)
-        scored: list[tuple[float, str, dict[str, object]]] = []
+        scored: list[tuple[float, str, dict[str, Any]]] = []
         for item_id, (payload, emb) in self._items.items():
             score = _cosine_sparse(query_emb, emb)
             scored.append((score, item_id, payload))
         scored.sort(key=lambda x: x[0], reverse=True)
-        results: list[dict[str, object]] = []
-        for score, item_id, payload in scored[:limit]:
+        results: list[dict[str, Any]] = []
+        for i in range(min(limit, len(scored))):
+            score, item_id, payload = scored[i]
             results.append({"id": item_id, "score": score, "payload": payload})
         return results
 
     def bulk_add(
         self,
-        rows: Iterable[tuple[str, str, dict[str, object]]],
+        rows: Iterable[tuple[str, str, dict[str, Any]]],
     ) -> None:
         """Add many rows."""
         for item_id, text, payload in rows:

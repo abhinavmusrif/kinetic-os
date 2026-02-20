@@ -44,6 +44,13 @@ class Orchestrator:
         self.root = (root or default_root).resolve()
 
     def build(self) -> RuntimeBundle:
+        # Load .env for API keys (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(self.root / ".env")
+        except ImportError:
+            pass  # python-dotenv is optional
+
         config = load_effective_config(self.root)
         paths = ensure_runtime_dirs(self.root, config)
 
@@ -69,13 +76,15 @@ class Orchestrator:
             workspace_dir=paths["workspace_dir"],
             config=config.get("tools_cfg", {}),
             safe_runner=safe_runner,
+            llm=llm,
         )
-        action_router = ActionRouter(tool_registry=tool_registry)
+        action_router = ActionRouter(tool_registry=tool_registry, llm=llm)
         control_loop = ControlLoop(
             event_bus=EventBus(),
-            task_decomposer=TaskDecomposer(llm=llm),
+            task_decomposer=TaskDecomposer(llm=llm, retriever=retriever),
             action_runner=action_router,
             memory_manager=memory,
+            llm=llm,
         )
         consolidator = Consolidator(memory_manager=memory, llm_provider=llm)
 

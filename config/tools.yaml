@@ -9,8 +9,10 @@ tools:
     enabled: false
     require_confirmation: true
   browser_tool:
-    enabled: false
-    require_confirmation: true
+    enabled: true
   git_tool:
     enabled: false
     require_confirmation: true
+  os_automation_tool:
+    enabled: true
+    allow_os_automation: true

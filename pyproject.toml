@@ -26,7 +26,7 @@ dev = [
   "types-PyYAML>=6.0.12.20240917",
 ]
 vision = ["Pillow>=10.0,<12.0", "pytesseract>=0.3,<0.4"]
-os = ["pyautogui>=0.9,<1.0"]
+os = ["pyautogui>=0.9,<1.0", "uiautomation>=3.0,<4.0"]
 api = ["openai>=1.0,<2.0"]
 vector = ["faiss-cpu>=1.7,<2.0"]
 

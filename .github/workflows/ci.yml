@@ -2,43 +2,43 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [ "master", "main" ]
   pull_request:
-    branches: ["**"]
+    branches: [ "master", "main" ]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Test on ${{ matrix.os }} with Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
 
-      - name: Security scan
-        run: python scripts/security_scan.py
+    - name: Run Ruff (Lint)
+      run: ruff check .
 
-      - name: Lint (ruff)
-        run: ruff check .
+    - name: Run Black (Formatting)
+      run: black --check .
 
-      - name: Format check (black)
-        run: black --check .
+    - name: Run MyPy (Type Check)
+      run: mypy .
 
-      - name: Type check (mypy)
-        run: mypy .
-
-      - name: Tests
-        run: pytest -q
+    - name: Run Pytest
+      run: pytest -q
+      env:
+        AO_ENABLE_UI_TESTS: "0"

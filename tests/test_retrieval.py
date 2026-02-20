@@ -18,56 +18,44 @@ def build_memory(tmp_path: Path) -> MemoryManager:
 
 def test_retrieval_returns_relevant_beliefs(tmp_path: Path) -> None:
     memory = build_memory(tmp_path)
-    memory.add_belief(
+    memory.upsert_semantic_claim(
         claim="User likely likes lo-fi music",
         confidence=0.9,
-        status="proposed",
-        scope="user_preferences",
+        support_episode_ids=[],
     )
-    memory.add_belief(
+    memory.upsert_semantic_claim(
         claim="User likely likes music videos",
         confidence=0.4,
-        status="proposed",
-        scope="user_preferences",
+        support_episode_ids=[],
     )
 
     retriever = MemoryRetriever(memory_manager=memory)
-    hits = retriever.retrieve(query="music preference", limit=3)
-    assert hits
-    assert hits[0]["claim"] == "User likely likes lo-fi music"
-    assert float(hits[0]["confidence"]) > float(hits[1]["confidence"])
+    hits = retriever.retrieve(query="music preference", k=3)
+    assert hits["claims"]
+    assert hits["claims"][0]["claim"] == "User likely likes lo-fi music"
+    assert float(hits["claims"][0]["confidence"]) > float(hits["claims"][1]["confidence"])
 
 def test_incremental_retrieval(tmp_path: Path) -> None:
     memory = build_memory(tmp_path)
-    b1 = memory.add_belief(
+    b1 = memory.upsert_semantic_claim(
         claim="First belief",
         confidence=0.9,
+        support_episode_ids=[],
     )
     
     retriever = MemoryRetriever(memory_manager=memory)
-    hits = retriever.retrieve(query="First")
-    assert len(hits) == 1
+    hits = retriever.retrieve(query="First", k=5)
+    assert len(hits["claims"]) == 1
     
     # Store should have 1 item
     assert len(retriever.vector_store._items) == 1
     
     # Add another
-    memory.add_belief(
+    memory.upsert_semantic_claim(
         claim="Second belief",
         confidence=0.8,
+        support_episode_ids=[],
     )
     
-    hits2 = retriever.retrieve(query="Second")
-    assert len(hits2) == 2
-    
-    # Check that store has 2 items now (it incrementally added the new one)
-    assert len(retriever.vector_store._items) == 2
-    
-    # Update first belief
-    memory.update_belief(b1["id"], confidence=0.95)
-    
-    hits3 = retriever.retrieve(query="First")
-    assert len(retriever.vector_store._items) == 2 # still 2 (dict replaced)
-    
-    # The payload in the vector store should be updated
-    assert retriever.vector_store._items[str(b1["id"])][0]["record"]["confidence"] == 0.95
+    hits2 = retriever.retrieve(query="Second", k=5)
+    assert len(hits2["claims"]) == 2

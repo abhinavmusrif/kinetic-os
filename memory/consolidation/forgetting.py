@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from memory.schemas import BeliefRecord, EpisodeRecord
+from memory.schemas import SemanticClaimRecord, EpisodeRecord
 
 
 class ForgettingPolicy:
@@ -22,9 +22,9 @@ class ForgettingPolicy:
 
         with self.memory_manager.sql_store.session() as sess:
             stale_beliefs = (
-                sess.query(BeliefRecord)
-                .filter(BeliefRecord.created_at < cutoff)
-                .filter(BeliefRecord.status == "proposed")
+                sess.query(SemanticClaimRecord)
+                .filter(SemanticClaimRecord.created_at < cutoff)
+                .filter(SemanticClaimRecord.status == "proposed")
                 .all()
             )
             for belief in stale_beliefs:

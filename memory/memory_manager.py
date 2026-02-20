@@ -10,13 +10,13 @@ from typing import Any
 
 from memory.privacy import normalize_privacy_level
 from memory.schemas import (
-    BeliefRecord,
     EpisodeRecord,
     EvidenceRecord,
     GoalRecord,
     HypothesisRecord,
     SelfModelRecord,
-    SkillRecord,
+    SemanticClaimRecord,
+    ProcedureRecord,
 )
 from memory.stores.sql_store import SQLStore
 from memory.types.context import ContextMessage
@@ -42,25 +42,37 @@ class MemoryManager:
 
     def add_episode(
         self,
-        summary: str,
-        raw_context_refs: list[str],
-        actions_taken: list[str],
-        outcome: str,
+        text: str,
+        structured_json: dict[str, Any],
+        source: str,
         evidence_refs: list[str],
-        confidence: float,
-        tags: list[str],
-        privacy_level: str,
+        outcome: str,
+        summary: str = "",
+        raw_context_refs: list[str] | None = None,
+        actions_taken: list[str] | None = None,
+        failure_reason: str = "",
+        confidence: float = 1.0,
+        tags: list[str] | None = None,
+        privacy_level: str = "internal",
+        cost_tokens: int | None = None,
+        cost_usd: float | None = None,
     ) -> dict[str, Any]:
         """Insert episodic record."""
         record = EpisodeRecord(
             event_id=uuid.uuid4().hex,
+            source=source,
+            text=text,
+            structured_json=structured_json,
             summary=summary,
-            raw_context_refs=raw_context_refs,
-            actions_taken=actions_taken,
+            raw_context_refs=raw_context_refs or [],
+            actions_taken=actions_taken or [],
             outcome=outcome,
+            failure_reason=failure_reason,
             evidence_refs=evidence_refs,
             confidence=max(0.0, min(1.0, confidence)),
-            tags=tags,
+            cost_tokens=cost_tokens,
+            cost_usd=cost_usd,
+            tags=tags or [],
             privacy_level=normalize_privacy_level(privacy_level),
         )
         with self.sql_store.session() as sess:
@@ -80,112 +92,106 @@ class MemoryManager:
             )
             return [self._episode_to_dict(row) for row in rows]
 
-    def add_belief(
+    def upsert_semantic_claim(
         self,
         claim: str,
+        support_episode_ids: list[str],
         confidence: float,
-        status: str = "proposed",
-        supporting_episode_ids: list[int] | None = None,
-        conflicts_with_ids: list[int] | None = None,
+        claim_type: str = "belief",
+        uncertainty_notes: str = "",
         scope: str = "global",
     ) -> dict[str, Any]:
-        """Insert semantic belief."""
-        record = BeliefRecord(
-            claim=claim,
-            confidence=max(0.0, min(1.0, confidence)),
-            status=status,
-            supporting_episode_ids=supporting_episode_ids or [],
-            conflicts_with_ids=conflicts_with_ids or [],
-            scope=scope,
-            last_confirmed_at=None,
-        )
+        """Insert or update a semantic claim."""
         with self.sql_store.session() as sess:
-            sess.add(record)
-            sess.flush()
-            payload = self._belief_to_dict(record)
-        return payload
-
-    def update_belief(
-        self,
-        belief_id: int,
-        *,
-        status: str | None = None,
-        confidence: float | None = None,
-        conflicts_with_ids: list[int] | None = None,
-        last_confirmed_at: datetime | None = None,
-    ) -> dict[str, Any] | None:
-        """Update belief fields by id."""
-        with self.sql_store.session() as sess:
-            row = sess.query(BeliefRecord).filter(BeliefRecord.id == belief_id).first()
+            row = sess.query(SemanticClaimRecord).filter(SemanticClaimRecord.claim == claim).first()
             if not row:
-                return None
-            if status is not None:
-                row.status = status
-            if confidence is not None:
+                row = SemanticClaimRecord(
+                    claim=claim,
+                    type=claim_type,
+                    confidence=max(0.0, min(1.0, confidence)),
+                    uncertainty_notes=uncertainty_notes,
+                    supporting_episode_ids=support_episode_ids,
+                    scope=scope,
+                )
+                sess.add(row)
+            else:
                 row.confidence = max(0.0, min(1.0, confidence))
-            if conflicts_with_ids is not None:
-                row.conflicts_with_ids = conflicts_with_ids
-            if last_confirmed_at is not None:
-                row.last_confirmed_at = last_confirmed_at
+                # Merge supporting ids
+                current_ids = set(row.supporting_episode_ids or [])
+                current_ids.update(support_episode_ids)
+                row.supporting_episode_ids = list(current_ids)
+                if uncertainty_notes:
+                    row.uncertainty_notes = uncertainty_notes
             sess.flush()
-            payload = self._belief_to_dict(row)
+            payload = self._semantic_claim_to_dict(row)
         return payload
 
-    def list_beliefs(self, limit: int = 50, updated_after: datetime | None = None) -> list[dict[str, Any]]:
-        """List semantic beliefs."""
+    def list_semantic_claims(self, limit: int = 50, updated_after: datetime | None = None) -> list[dict[str, Any]]:
+        """List semantic claims."""
         with self.sql_store.session() as sess:
-            query = sess.query(BeliefRecord)
+            query = sess.query(SemanticClaimRecord)
             if updated_after is not None:
-                query = query.filter(BeliefRecord.updated_at > updated_after)
-            rows = query.order_by(BeliefRecord.updated_at.desc()).limit(limit).all()
-            return [self._belief_to_dict(row) for row in rows]
+                query = query.filter(SemanticClaimRecord.updated_at > updated_after)
+            rows = query.order_by(SemanticClaimRecord.updated_at.desc()).limit(limit).all()
+            return [self._semantic_claim_to_dict(row) for row in rows]
 
-    def add_skill(
+    def upsert_procedure(
         self,
         name: str,
-        trigger_conditions: str,
-        steps: list[str],
+        trigger_pattern: str,
+        steps_json: list[dict[str, Any]],
+        required_tools: list[str],
+        verification_json: dict[str, Any],
         safety_constraints: list[str],
-        success_criteria: str,
-        known_failure_modes: list[str],
+        success_rate: float = 1.0,
     ) -> dict[str, Any]:
         """Insert procedural skill."""
-        record = SkillRecord(
-            name=name,
-            trigger_conditions=trigger_conditions,
-            steps=steps,
-            safety_constraints=safety_constraints,
-            success_criteria=success_criteria,
-            known_failure_modes=known_failure_modes,
-        )
         with self.sql_store.session() as sess:
-            sess.add(record)
+            row = sess.query(ProcedureRecord).filter(ProcedureRecord.name == name).first()
+            if not row:
+                row = ProcedureRecord(
+                    name=name,
+                    trigger_pattern=trigger_pattern,
+                    steps_json=steps_json,
+                    required_tools=required_tools,
+                    verification_json=verification_json,
+                    safety_constraints=safety_constraints,
+                    success_rate=success_rate,
+                )
+                sess.add(row)
+            else:
+                row.trigger_pattern = trigger_pattern
+                row.steps_json = steps_json
+                row.required_tools = required_tools
+                row.verification_json = verification_json
+                row.safety_constraints = safety_constraints
+                row.success_rate = success_rate
             sess.flush()
-            return self._skill_to_dict(record)
+            return self._procedure_to_dict(row)
 
-    def list_skills(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_procedures(self, limit: int = 20) -> list[dict[str, Any]]:
         """List procedural skills."""
         with self.sql_store.session() as sess:
-            rows = sess.query(SkillRecord).limit(limit).all()
-            return [self._skill_to_dict(row) for row in rows]
+            rows = sess.query(ProcedureRecord).limit(limit).all()
+            return [self._procedure_to_dict(row) for row in rows]
 
     def add_goal(
         self,
         goal_text: str,
         priority: int = 5,
         deadline: datetime | None = None,
-        progress_state: str = "active",
-        subgoals: list[str] | None = None,
-        completion_criteria: str = "",
+        status: str = "active",
+        parent_goal_id: int | None = None,
+        progress_json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Insert goal record."""
         record = GoalRecord(
             goal_text=goal_text,
             priority=priority,
             deadline=deadline,
-            progress_state=progress_state,
-            subgoals=subgoals or [],
-            completion_criteria=completion_criteria,
+            status=status,
+            parent_goal_id=parent_goal_id,
+            progress_json=progress_json or {},
         )
         with self.sql_store.session() as sess:
             sess.add(record)
@@ -200,27 +206,27 @@ class MemoryManager:
 
     def upsert_self_model(
         self,
-        tools_available: list[str],
-        capabilities: str,
-        limitations: str,
-        reliability_scores: dict[str, float],
+        capabilities_json: dict[str, Any],
+        tool_reliability_json: dict[str, float],
+        known_failure_modes_json: list[str],
+        preferences_about_self_json: dict[str, Any],
     ) -> dict[str, Any]:
         """Insert or update singleton self-model row."""
         with self.sql_store.session() as sess:
             row = sess.query(SelfModelRecord).order_by(SelfModelRecord.id.asc()).first()
             if row is None:
                 row = SelfModelRecord(
-                    tools_available=tools_available,
-                    capabilities=capabilities,
-                    limitations=limitations,
-                    reliability_scores=reliability_scores,
+                    capabilities_json=capabilities_json,
+                    tool_reliability_json=tool_reliability_json,
+                    known_failure_modes_json=known_failure_modes_json,
+                    preferences_about_self_json=preferences_about_self_json,
                 )
                 sess.add(row)
             else:
-                row.tools_available = tools_available
-                row.capabilities = capabilities
-                row.limitations = limitations
-                row.reliability_scores = reliability_scores
+                row.capabilities_json = capabilities_json
+                row.tool_reliability_json = tool_reliability_json
+                row.known_failure_modes_json = known_failure_modes_json
+                row.preferences_about_self_json = preferences_about_self_json
                 row.last_updated = datetime.now(UTC)
             sess.flush()
             return self._self_model_to_dict(row)
@@ -279,44 +285,148 @@ class MemoryManager:
             sess.flush()
             return self._evidence_to_dict(row)
 
-    def propose_belief_from_text(
+    def propose_semantic_claims(
         self,
-        text: str,
-        supporting_episode_ids: list[int],
+        episodes_batch: list[dict[str, Any]],
+        llm_optional: bool = True,
     ) -> list[dict[str, Any]]:
-        """Create belief proposals using simple preference extraction heuristics."""
+        """Create belief proposals. If no LLM, use simple preference extraction heuristics on text."""
         proposals: list[dict[str, Any]] = []
         patterns = [
-            (r"\bi\s+love\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes"),
-            (r"\bi\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes"),
-            (r"\bi\s+prefer\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes"),
-            (r"\bi\s+dislike\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes"),
-            (r"\bi\s+hate\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes"),
-            (r"\bi\s+don't\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes"),
-            (r"\bi\s+do\s+not\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes"),
+            (r"\bi\s+love\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes", 0.72),
+            (r"\bi\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes", 0.7),
+            (r"\bi\s+prefer\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "likes", 0.7),
+            (r"\bi\s+dislike\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes", 0.7),
+            (r"\bi\s+hate\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes", 0.72),
+            (r"\bi\s+don't\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes", 0.7),
+            (r"\bi\s+do\s+not\s+like\s+([a-zA-Z0-9\-\s]+?)(?:\band\b|[.,;]|$)", "dislikes", 0.7),
         ]
-        for pattern, sentiment in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if not match:
-                continue
-            topic = match.group(1).strip().rstrip(".")
-            claim = f"User likely {sentiment} {topic}"
-            proposals.append(
-                self.add_belief(
-                    claim=claim,
-                    confidence=0.72 if sentiment == "likes" else 0.7,
-                    status="proposed",
-                    supporting_episode_ids=supporting_episode_ids,
-                    scope="user_preferences",
+        
+        # Determine claims using heuristics for now.
+        for ep in episodes_batch:
+            text = ep.get("text", "") or ep.get("summary", "")
+            for pattern, sentiment, base_conf in patterns:
+                match = re.search(pattern, text, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                topic = match.group(1).strip().rstrip(".")
+                claim = f"User likely {sentiment} {topic}"
+                # Append to proposals
+                proposals.append(
+                    self.upsert_semantic_claim(
+                        claim=claim,
+                        confidence=base_conf,
+                        support_episode_ids=[str(ep["id"])],
+                        scope="user_preferences",
+                    )
                 )
-            )
         return proposals
+
+    def detect_conflicts(self, new_claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Detect conflicts between new claims and existing semantic claims."""
+        # Stub lexical check for now. In real impl, use semantic similarity / embeddings.
+        conflicts = []
+        existing = self.list_semantic_claims(limit=1000)
+        # simplistic naive text overlap 
+        for claim in new_claims:
+            for ex in existing:
+                if claim["id"] == ex["id"]:
+                    continue
+                # If they share topics but have opposing sentiments (e.g. likes X vs dislikes X)
+                if "likes" in claim["claim"] and "dislikes" in ex["claim"]:
+                    words_c = set(claim["claim"].split())
+                    words_e = set(ex["claim"].split())
+                    if len(words_c.intersection(words_e)) > 2:
+                        conflicts.append({"new": claim, "existing": ex})
+        return conflicts
+
+    def resolve_conflicts(self, conflicts: list[dict[str, Any]], policy: str = "evidence_weighted") -> None:
+        """Resolve detected conflicts by adjusting confidence levels."""
+        with self.sql_store.session() as sess:
+            for conflict in conflicts:
+                new_c = conflict["new"]
+                ext_c = conflict["existing"]
+                
+                new_row = sess.query(SemanticClaimRecord).filter(SemanticClaimRecord.id == new_c["id"]).first()
+                ext_row = sess.query(SemanticClaimRecord).filter(SemanticClaimRecord.id == ext_c["id"]).first()
+                if not new_row or not ext_row:
+                    continue
+                
+                # Evidence weighted policy
+                new_ev = len(new_row.supporting_episode_ids or [])
+                ext_ev = len(ext_row.supporting_episode_ids or [])
+                
+                if new_ev > ext_ev:
+                    ext_row.confidence *= 0.8
+                    ext_row.contradiction_count += 1
+                elif ext_ev > new_ev:
+                    new_row.confidence *= 0.8
+                    new_row.contradiction_count += 1
+                else:
+                    # Tie, decay both slightly
+                    new_row.confidence *= 0.9
+                    ext_row.confidence *= 0.9
+                    new_row.contradiction_count += 1
+                    ext_row.contradiction_count += 1
+            sess.flush()
+
+    def extract_procedures_from_success(self, episodes: list[dict[str, Any]], llm_optional: bool = True) -> list[dict[str, Any]]:
+        """Extract repeatable skills from successful episodic sequences."""
+        # Without an LLM, we cannot safely invent functional JSON steps.
+        # Fallback to returning nothing safely. 
+        proposals: list[dict[str, Any]] = []
+        return proposals
+
+    def update_self_model_from_runs(self, tool_outcomes: dict[str, dict[str, int]]) -> dict[str, Any] | None:
+        """Update self-model reliability scores given a map of tool names to success/fail counts."""
+        with self.sql_store.session() as sess:
+            row = sess.query(SelfModelRecord).order_by(SelfModelRecord.id.asc()).first()
+            if not row:
+                return None
+            
+            # Make a copy to avoid mutating the dict directly if sqlalchemy proxies it
+            rel_scores = dict(row.tool_reliability_json or {})
+            
+            for tool_name, outcomes in tool_outcomes.items():
+                successes = outcomes.get("success", 0)
+                fails = outcomes.get("fail", 0)
+                total = successes + fails
+                if total > 0:
+                    current_rel = rel_scores.get(tool_name, 1.0)
+                    new_rel = successes / total
+                    # moving average
+                    rel_scores[tool_name] = (current_rel * 0.7) + (new_rel * 0.3)
+                    
+            row.tool_reliability_json = rel_scores
+            row.last_updated = datetime.now(UTC)
+            sess.flush()
+            return self._self_model_to_dict(row)
+
+    def goal_update(self, goal_id: int, progress_json: dict[str, Any]) -> dict[str, Any] | None:
+        """Update progress on a specific goal."""
+        with self.sql_store.session() as sess:
+            row = sess.query(GoalRecord).filter(GoalRecord.id == goal_id).first()
+            if not row:
+                return None
+            row.progress_json = progress_json
+            sess.flush()
+            return self._goal_to_dict(row)
+
+    def goal_close(self, goal_id: int, final_status: str) -> dict[str, Any] | None:
+        """Mark a goal as done/failed etc."""
+        with self.sql_store.session() as sess:
+            row = sess.query(GoalRecord).filter(GoalRecord.id == goal_id).first()
+            if not row:
+                return None
+            row.status = final_status
+            sess.flush()
+            return self._goal_to_dict(row)
 
     def inspect_recent(self, limit: int = 10) -> dict[str, list[dict[str, Any]]]:
         """Return compact memory inspection payload."""
         return {
             "episodes": self.list_episodes(limit=limit),
-            "beliefs": self.list_beliefs(limit=limit),
+            "beliefs": self.list_semantic_claims(limit=limit),
             "goals": self.list_goals(limit=limit),
         }
 
@@ -326,25 +436,35 @@ class MemoryManager:
             "id": row.id,
             "event_id": row.event_id,
             "timestamp": row.timestamp,
+            "source": row.source,
             "summary": row.summary,
+            "text": row.text,
+            "structured_json": dict(row.structured_json or {}),
             "raw_context_refs": list(row.raw_context_refs or []),
             "actions_taken": list(row.actions_taken or []),
             "outcome": row.outcome,
+            "failure_reason": row.failure_reason,
             "evidence_refs": list(row.evidence_refs or []),
             "confidence": row.confidence,
+            "cost_tokens": row.cost_tokens,
+            "cost_usd": row.cost_usd,
             "tags": list(row.tags or []),
             "privacy_level": row.privacy_level,
+            "embedding": list(row.embedding or []) if row.embedding else None,
         }
 
     @staticmethod
-    def _belief_to_dict(row: BeliefRecord) -> dict[str, Any]:
+    def _semantic_claim_to_dict(row: SemanticClaimRecord) -> dict[str, Any]:
         return {
             "id": row.id,
             "claim": row.claim,
+            "type": row.type,
             "confidence": row.confidence,
+            "uncertainty_notes": row.uncertainty_notes,
             "status": row.status,
             "supporting_episode_ids": list(row.supporting_episode_ids or []),
             "conflicts_with_ids": list(row.conflicts_with_ids or []),
+            "contradiction_count": row.contradiction_count,
             "last_confirmed_at": row.last_confirmed_at,
             "scope": row.scope,
             "created_at": row.created_at,
@@ -352,14 +472,17 @@ class MemoryManager:
         }
 
     @staticmethod
-    def _skill_to_dict(row: SkillRecord) -> dict[str, Any]:
+    def _procedure_to_dict(row: ProcedureRecord) -> dict[str, Any]:
         return {
             "id": row.id,
             "name": row.name,
-            "trigger_conditions": row.trigger_conditions,
-            "steps": list(row.steps or []),
+            "trigger_pattern": row.trigger_pattern,
+            "steps_json": list(row.steps_json or []),
+            "required_tools": list(row.required_tools or []),
+            "verification_json": dict(row.verification_json or {}),
             "safety_constraints": list(row.safety_constraints or []),
-            "success_criteria": row.success_criteria,
+            "success_rate": row.success_rate,
+            "last_run_ts": row.last_run_ts,
             "known_failure_modes": list(row.known_failure_modes or []),
         }
 
@@ -368,22 +491,23 @@ class MemoryManager:
         return {
             "id": row.id,
             "goal_text": row.goal_text,
+            "status": row.status,
+            "parent_goal_id": row.parent_goal_id,
             "priority": row.priority,
             "created_at": row.created_at,
             "deadline": row.deadline,
-            "progress_state": row.progress_state,
-            "subgoals": list(row.subgoals or []),
-            "completion_criteria": row.completion_criteria,
+            "progress_json": dict(row.progress_json or {}),
+            "last_update_ts": getattr(row, "last_update_ts", row.created_at),
         }
 
     @staticmethod
     def _self_model_to_dict(row: SelfModelRecord) -> dict[str, Any]:
         return {
             "id": row.id,
-            "tools_available": list(row.tools_available or []),
-            "capabilities": row.capabilities,
-            "limitations": row.limitations,
-            "reliability_scores": dict(row.reliability_scores or {}),
+            "capabilities_json": dict(row.capabilities_json or {}),
+            "tool_reliability_json": dict(row.tool_reliability_json or {}),
+            "known_failure_modes_json": list(row.known_failure_modes_json or []),
+            "preferences_about_self_json": dict(row.preferences_about_self_json or {}),
             "last_updated": row.last_updated,
         }
 

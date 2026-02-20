@@ -16,10 +16,10 @@ except ImportError:
 
 class CaptureResult(TypedDict):
     """Result from capturing the screen or a window."""
-    image: Image.Image
     resolution: tuple[int, int]
     timestamp: float
     hash: str
+    offset: tuple[int, int]
 
 
 class ScreenCapture:
@@ -36,6 +36,7 @@ class ScreenCapture:
             monitor_index: -1 for all monitors combined, or 1-based index for specific monitor.
         """
         timestamp = time.time()
+        offset = (0, 0)
         
         if self._mss_ctx:
             # mss uses 1-based index, or 0 for all monitors combined.
@@ -44,9 +45,11 @@ class ScreenCapture:
                 monitors = self._mss_ctx.monitors
                 if idx >= len(monitors):
                     idx = 0
-                sct_img = self._mss_ctx.grab(monitors[idx])
+                sct_mon = monitors[idx]
+                sct_img = self._mss_ctx.grab(sct_mon)
                 # Convert to PIL Image
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+                offset = (sct_mon["left"], sct_mon["top"])
             except Exception:
                 return None
         else:
@@ -70,6 +73,7 @@ class ScreenCapture:
             "resolution": cast(tuple[int, int], img.size),
             "timestamp": timestamp,
             "hash": frame_hash,
+            "offset": offset,
         }
 
     def capture_active_window(self, window_manager: Any) -> CaptureResult | None:
@@ -122,4 +126,5 @@ class ScreenCapture:
             "resolution": cast(tuple[int, int], img.size),
             "timestamp": timestamp,
             "hash": frame_hash,
+            "offset": (int(left), int(top)),
         }

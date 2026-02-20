@@ -62,16 +62,16 @@ class ReplayEngine:
     def run(self, limit: int = 50) -> dict[str, Any]:
         """Generate candidate belief updates from recent episodes."""
         episodes = self.memory_manager.list_episodes(limit=limit)
-        existing_beliefs = self.memory_manager.list_beliefs(limit=500)
+        existing_claims = self.memory_manager.list_semantic_claims(limit=500)
         existing_by_claim: dict[str, list[dict[str, Any]]] = {}
-        for belief in existing_beliefs:
-            claim = str(belief["claim"])
-            existing_by_claim.setdefault(claim, []).append(belief)
+        for claim_dict in existing_claims:
+            claim_text = str(claim_dict["claim"])
+            existing_by_claim.setdefault(claim_text, []).append(claim_dict)
         added: list[dict[str, Any]] = []
         seen_claims: set[str] = set()
 
         for episode in episodes:
-            episode_id = int(episode["id"])
+            episode_id = str(episode["id"])
             text_to_mine = episode["summary"] + " " + str(episode.get("outcome", ""))
             candidate_specs = self._extract_with_llm(text_to_mine)
             for claim, confidence in candidate_specs:
@@ -79,20 +79,21 @@ class ReplayEngine:
                 if existing_rows:
                     latest_updated: dict[str, Any] | None = None
                     for existing in existing_rows:
-                        latest_updated = self.memory_manager.update_belief(
-                            belief_id=int(existing["id"]),
-                            status="proposed",
+                        # Re-upsert to update confidence / add episode supporting it
+                        latest_updated = self.memory_manager.upsert_semantic_claim(
+                            claim=claim,
+                            support_episode_ids=[episode_id],
                             confidence=confidence,
+                            scope="user_preferences",
                         )
                     if latest_updated is not None and claim not in seen_claims:
                         added.append(latest_updated)
                         seen_claims.add(claim)
                     continue
-                created = self.memory_manager.add_belief(
+                created = self.memory_manager.upsert_semantic_claim(
                     claim=claim,
+                    support_episode_ids=[episode_id],
                     confidence=confidence,
-                    status="proposed",
-                    supporting_episode_ids=[episode_id],
                     scope="user_preferences",
                 )
                 existing_by_claim[claim] = [created]

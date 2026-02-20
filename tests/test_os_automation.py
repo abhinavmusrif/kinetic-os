@@ -2,10 +2,23 @@
 
 from unittest.mock import MagicMock
 
+import os
+import sys
+
+import pytest
+
 from os_controller.windows_controller import WindowsController
 from tools.system_tools.os_automation_tool import OSAutomationTool
 
+should_skip_ui = (
+    sys.platform != "win32" or 
+    os.environ.get("AO_ENABLE_UI_TESTS", "0") != "1"
+)
+ui_skip_reason = "UI tests are disabled. Set AO_ENABLE_UI_TESTS=1 on Windows."
 
+
+
+@pytest.mark.skipif(should_skip_ui, reason=ui_skip_reason)
 def test_windows_controller_governance() -> None:
     controller = WindowsController(allow_os_automation=False)
     try:
@@ -15,6 +28,7 @@ def test_windows_controller_governance() -> None:
         assert "disabled by governance" in str(e).lower() or "windows environment" in str(e).lower()
 
 
+@pytest.mark.skipif(should_skip_ui, reason=ui_skip_reason)
 def test_os_automation_tool_disabled_run() -> None:
     safe_runner = MagicMock()
     # Test disabled

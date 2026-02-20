@@ -17,30 +17,21 @@ class MemoryRetriever:
         self._last_watermark = None
 
     def _ensure_index(self) -> None:
-        beliefs = self.memory_manager.list_beliefs(limit=5000, updated_after=self._last_watermark)
-        if not beliefs:
-            return
-            
-        current_watermark = max((b.get("updated_at") or b.get("created_at") for b in beliefs), default=None)
+        claims = self.memory_manager.list_semantic_claims(limit=5000)
+        episodes = self.memory_manager.list_episodes(limit=1000)
+        procedures = self.memory_manager.list_procedures(limit=500)
         
-        self.vector_store.bulk_add(
-            (
-                str(item["id"]),
-                item["claim"],
-                {"type": "belief", "record": item},
-            )
-            for item in beliefs
-        )
-        if current_watermark is not None:
-            if self._last_watermark is None or current_watermark > self._last_watermark:
-                self._last_watermark = current_watermark
+        payloads: list[tuple[str, str, dict[str, Any]]] = []
+        for c in claims:
+            payloads.append((f"claim_{c['id']}", c["claim"], {"type": "claim", "record": c}))
+        for e in episodes:
+            text = f"{e.get('summary', '')} {e.get('text', '')}"
+            payloads.append((f"episode_{e['id']}", text, {"type": "episode", "record": e}))
+        for p in procedures:
+            text = f"{p.get('name', '')} {p.get('trigger_pattern', '')}"
+            payloads.append((f"procedure_{p['id']}", text, {"type": "procedure", "record": p}))
 
-    @staticmethod
-    def _safe_int(value: object) -> int | None:
-        try:
-            return int(str(value))
-        except Exception:
-            return None
+        self.vector_store.bulk_add(payloads)
 
     @staticmethod
     def _safe_float(value: object, default: float = 0.0) -> float:
@@ -52,46 +43,76 @@ class MemoryRetriever:
     def retrieve(
         self,
         query: str,
+        k: int = 10,
+        mode: str = "hybrid",
         active_goal: str | None = None,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        """Return ranked belief records relevant to query."""
-        beliefs = self.memory_manager.list_beliefs(limit=500)
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return ranked distinct records relevant to query."""
         self._ensure_index()
-        vector_hits: dict[int, float] = {}
-        for hit in self.vector_store.search(query, limit=max(limit * 2, 10)):
-            hit_id = self._safe_int(hit.get("id"))
-            if hit_id is None:
-                continue
-            vector_hits[hit_id] = self._safe_float(hit.get("score"), default=0.0)
-
+        
+        # We search for k * 3 to ensure we have enough pool for lexical rescoring if mode=="hybrid"
+        vector_hits = self.vector_store.search(query, limit=max(k * 3, 20))
+        
         scored: list[tuple[float, dict[str, Any]]] = []
-        for belief in beliefs:
-            belief_id = self._safe_int(belief.get("id"))
-            if belief_id is None:
-                continue
-            lexical = lexical_overlap(query, belief["claim"])
-            vector = vector_hits.get(belief_id, 0.0)
-            recency = recency_score(belief.get("created_at"))
-            confidence = self._safe_float(belief.get("confidence", 0.5), default=0.5)
-            goal_rel = lexical_overlap(active_goal or "", belief["claim"]) if active_goal else 0.0
+        for hit in vector_hits:
+            hit_id = str(hit.get("id"))
+            vec_score = self._safe_float(hit.get("score"), default=0.0)
+            payload = hit.get("payload", {})
+            record_type = payload.get("type", "unknown")
+            record = payload.get("record", {})
+            
+            # Determine lexical text
+            lex_text = ""
+            conf = 0.5
+            if record_type == "claim":
+                lex_text = record.get("claim", "")
+                conf = self._safe_float(record.get("confidence", 0.5))
+            elif record_type == "episode":
+                lex_text = f"{record.get('summary', '')} {record.get('text', '')}"
+                conf = self._safe_float(record.get("confidence", 1.0))
+            elif record_type == "procedure":
+                lex_text = f"{record.get('name', '')} {record.get('trigger_pattern', '')}"
+                conf = self._safe_float(record.get("success_rate", 1.0))
+
+            lexical = lexical_overlap(query, lex_text) if mode == "hybrid" else 0.0
+            recency = recency_score(record.get("created_at") or record.get("timestamp"))
+            goal_rel = lexical_overlap(active_goal or "", lex_text) if active_goal else 0.0
+            
             score = final_score(
                 lexical=lexical,
-                vector=vector,
+                vector=vec_score,
                 recency=recency,
-                confidence=confidence,
+                confidence=conf,
                 goal_relevance=goal_rel,
             )
-            enriched = dict(belief)
-            enriched["id"] = belief_id
+            
+            enriched = dict(record)
             enriched["retrieval_score"] = score
+            enriched["retrieval_type"] = record_type
             scored.append((score, enriched))
+            
         scored.sort(
             key=lambda pair: (
                 pair[0],
-                self._safe_float(pair[1].get("confidence", 0.0), default=0.0),
-                -int(pair[1]["id"]),
+                self._safe_float(pair[1].get("confidence", pair[1].get("success_rate", 0.0))),
             ),
             reverse=True,
         )
-        return [item for _, item in scored[:limit]]
+        
+        results_by_type: dict[str, list[dict[str, Any]]] = {
+            "episodes": [],
+            "claims": [],
+            "procedures": [],
+        }
+        
+        for i in range(min(k, len(scored))):
+            _, item = scored[i]
+            rtype = item.pop("retrieval_type")
+            if rtype == "claim":
+                results_by_type["claims"].append(item)
+            elif rtype == "episode":
+                results_by_type["episodes"].append(item)
+            elif rtype == "procedure":
+                results_by_type["procedures"].append(item)
+                
+        return results_by_type

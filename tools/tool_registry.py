@@ -89,6 +89,7 @@ def build_default_registry(
     workspace_dir: Path,
     config: dict[str, Any],
     safe_runner: SafeRunner,
+    llm: Any | None = None,
 ) -> ToolRegistry:
     """Build default tool registry from config."""
     _ = root
@@ -152,6 +153,7 @@ def build_default_registry(
             config=config,
             enabled=_tool_enabled(config, "os_automation_tool", True),
             settings=_tool_settings(config, "os_automation_tool"),
+            llm=llm,
         ),
     )
     return registry

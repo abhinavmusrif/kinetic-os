@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -25,27 +26,37 @@ class EpisodeRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    source: Mapped[str] = mapped_column(String(32), default="system")
     summary: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text, default="")
+    structured_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw_context_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
     actions_taken: Mapped[list[str]] = mapped_column(JSON, default=list)
-    outcome: Mapped[str] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, default="unknown")
+    failure_reason: Mapped[str] = mapped_column(Text, default="")
     evidence_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    cost_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     privacy_level: Mapped[str] = mapped_column(String(32), default="internal")
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
 
 
-class BeliefRecord(Base):
+class SemanticClaimRecord(Base):
     """Semantic memory table."""
 
-    __tablename__ = "beliefs"
+    __tablename__ = "semantic_claims"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     claim: Mapped[str] = mapped_column(Text, index=True)
+    type: Mapped[str] = mapped_column(String(32), default="belief")  # preference/belief/fact/rule
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    uncertainty_notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="proposed")
-    supporting_episode_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
-    conflicts_with_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    supporting_episode_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    conflicts_with_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    contradiction_count: Mapped[int] = mapped_column(Integer, default=0)
     last_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -56,17 +67,20 @@ class BeliefRecord(Base):
     )
 
 
-class SkillRecord(Base):
-    """Procedural memory table."""
+class ProcedureRecord(Base):
+    """Procedural memory table (Skill memory)."""
 
-    __tablename__ = "skills"
+    __tablename__ = "procedures"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), unique=True)
-    trigger_conditions: Mapped[str] = mapped_column(Text)
-    steps: Mapped[list[str]] = mapped_column(JSON, default=list)
+    trigger_pattern: Mapped[str] = mapped_column(Text)
+    steps_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    required_tools: Mapped[list[str]] = mapped_column(JSON, default=list)
+    verification_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     safety_constraints: Mapped[list[str]] = mapped_column(JSON, default=list)
-    success_criteria: Mapped[str] = mapped_column(Text)
+    success_rate: Mapped[float] = mapped_column(Float, default=1.0)
+    last_run_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     known_failure_modes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
@@ -77,12 +91,13 @@ class GoalRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     goal_text: Mapped[str] = mapped_column(Text, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    parent_goal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=5)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    progress_state: Mapped[str] = mapped_column(String(32), default="active")
-    subgoals: Mapped[list[str]] = mapped_column(JSON, default=list)
-    completion_criteria: Mapped[str] = mapped_column(Text, default="")
+    progress_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    last_update_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class SelfModelRecord(Base):
@@ -91,11 +106,22 @@ class SelfModelRecord(Base):
     __tablename__ = "self_model"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tools_available: Mapped[list[str]] = mapped_column(JSON, default=list)
-    capabilities: Mapped[str] = mapped_column(Text, default="")
-    limitations: Mapped[str] = mapped_column(Text, default="")
-    reliability_scores: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
+    capabilities_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    tool_reliability_json: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
+    known_failure_modes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    preferences_about_self_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MemoryEventRecord(Base):
+    """Memory events log table."""
+
+    __tablename__ = "memory_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class HypothesisRecord(Base):

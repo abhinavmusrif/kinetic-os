@@ -20,21 +20,22 @@ def run_goal(goal: str) -> None:
     bundle = _runtime()
     result = bundle.control_loop.run_goal(goal)
     consolidation = bundle.consolidator.run()
-    candidate_beliefs = consolidation.get("replay", {}).get("candidate_beliefs", [])
-    stored_beliefs = bundle.memory.list_beliefs(limit=5)
+    candidate_beliefs = consolidation.get("replay", {}).get("extracted_claims", [])
+    stored_claims = bundle.memory.list_semantic_claims(limit=5)
 
     typer.echo(f"Goal: {result.goal}")
-    typer.echo(f"Tasks: {len(result.tasks)}")
-    for task in result.tasks:
+    typer.echo(f"Tasks: {len(result.tasks_executed)}")
+    for task in result.tasks_executed:
         typer.echo(f"- {task}")
+    typer.echo(f"Iterations: {result.iterations} | Completed: {result.completed}")
     typer.echo(f"Evaluation: {result.evaluation}")
     typer.echo(f"Adaptation: {result.adaptation}")
     typer.echo(f"Consolidation proposals: {len(candidate_beliefs)}")
-    if stored_beliefs:
-        latest = stored_beliefs[0]
+    if stored_claims:
+        latest = stored_claims[0]
         typer.echo(
-            "Latest belief: "
-            f"{latest['claim']} | confidence={latest['confidence']:.2f} | status={latest['status']}"
+            "Latest semantic claim: "
+            f"{latest.get('claim', '')} | confidence={latest.get('confidence', 0.0):.2f}"
         )
 
 
@@ -51,18 +52,68 @@ def chat() -> None:
         typer.echo(f"assistant: {response}")
 
 
-def memory_inspect(limit: int = 10) -> None:
+def memory_add(text: str, source: str, outcome: str) -> None:
+    """Add an episodic memory."""
+    bundle = _runtime()
+    bundle.memory.add_episode(
+        text=text,
+        structured_json={},
+        source=source,
+        outcome=outcome,
+        evidence_refs=[],
+        confidence=1.0,
+        privacy_level="internal"
+    )
+    typer.echo(f"Added episodic memory: {text}")
+
+
+def memory_inspect(limit: int = 10, claims: bool = False, episodes: bool = False, procedures: bool = False, goals: bool = False) -> None:
     """Inspect recent memory records."""
     bundle = _runtime()
+    
+    if claims or episodes or procedures or goals:
+        data = {}
+        if claims:
+            data["claims"] = bundle.memory.list_semantic_claims(limit=limit)
+        if episodes:
+            data["episodes"] = bundle.memory.list_episodes(limit=limit)
+        if procedures:
+            data["procedures"] = bundle.memory.list_procedures(limit=limit)
+        if goals:
+            data["goals"] = bundle.memory.list_goals(limit=limit)
+        typer.echo(json.dumps(_json_safe(data), indent=2))
+        return
+        
     data = bundle.memory.inspect_recent(limit=limit)
     typer.echo(json.dumps(_json_safe(data), indent=2))
 
 
-def memory_consolidate() -> None:
+def memory_consolidate(mode: str = "light") -> None:
     """Run consolidation cycle."""
     bundle = _runtime()
-    result = bundle.consolidator.run()
+    result = bundle.consolidator.run(mode=mode)
     typer.echo(json.dumps(_json_safe(result), indent=2))
+
+
+def goals_add(goal: str, priority: int) -> None:
+    """Add a new goal."""
+    bundle = _runtime()
+    bundle.memory.add_goal(goal_text=goal, priority=priority, progress_state="pending")
+    typer.echo(f"Added goal: {goal}")
+
+
+def goals_list(limit: int) -> None:
+    """List goals."""
+    bundle = _runtime()
+    goals = bundle.memory.list_goals(limit=limit)
+    typer.echo(json.dumps(_json_safe(goals), indent=2))
+
+
+def self_model_show() -> None:
+    """Show self model."""
+    bundle = _runtime()
+    model = bundle.memory.get_self_model()
+    typer.echo(json.dumps(_json_safe(model), indent=2))
 
 
 def config_show() -> None:

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from os_controller.base_controller import BaseController
+from os_controller.base_controller import BaseController, TaskResult
 from os_controller.input_controller import InputController
 from os_controller.screen_capture import ScreenCapture
 from os_controller.screen_reader import ScreenReader
@@ -73,61 +73,144 @@ class WindowsController(BaseController):
         self._ensure_allowed()
         return self.window_manager.list_windows()
 
-    def execute_visual_action(self, goal_description: str, target_label: str, action: str = "click", text_to_type: str = "") -> bool:
-        """Perception-action-verification loop to interact with the GUI visually."""
+    def _ensure_focus(self, target_window_title: str) -> bool:
+        if not target_window_title:
+            return True
+        return self.window_manager.focus_window(target_window_title)
+
+    def _dismiss_common_popups(self) -> None:
+        self.input_controller.press_hotkey("esc")
+        time.sleep(0.5)
+
+    def _scroll_search(self, direction: int = -1) -> None:
+        self.input_controller.scroll(amount=500 * direction)
+        time.sleep(1.0)
+
+    def execute_task(self, task: dict[str, Any]) -> TaskResult:
+        """Execute a highly reliable operator task with progression tracking."""
         self._ensure_allowed()
-        max_attempts = 3
         
-        for attempt in range(max_attempts):
-            self.logger.info("Visual action attempt %d/%d for goal: %s", attempt + 1, max_attempts, goal_description)
+        action = task.get("action")
+        steps_log: list[str] = []
+        last_hash: str | None = None
+        
+        # We can implement a larger loop for complex tasks, or handle specific primitives.
+        if action == "open_app":
+            name = task.get("name", "")
+            out = self.open_app(name)
+            steps_log.append(out)
+            return {"success": True, "steps": steps_log, "last_hash": None, "reason": None}
             
-            capture = self.screen_capture.capture_screen()
-            if not capture:
-                self.logger.error("Failed to capture screen.")
-                time.sleep(1)
-                continue
-
-            analysis = self.screen_reader.analyze(capture, prompt=f"Find the UI element for '{target_label}' to reach goal: '{goal_description}'")
-            
-            target_el = None
-            for el in analysis.get("elements", []):
-                if target_label.lower() in el.get("label", "").lower():
-                    target_el = el
-                    break
-
-            if not target_el:
-                self.logger.warning("Target '%s' not found. State: %s", target_label, analysis.get("state_summary"))
-                time.sleep(1)
-                continue
-
-            bbox = target_el["bbox"]
-            center_x = int((bbox[0] + bbox[2]) / 2)
-            center_y = int((bbox[1] + bbox[3]) / 2)
-            
-            if center_x < 0 or center_y < 0 or center_x > capture["resolution"][0] or center_y > capture["resolution"][1]:
-                self.logger.error("Computed coordinates out of bounds. Aborting.")
-                return False
-
-            if action == "click":
-                self.input_controller.click(center_x, center_y)
-            elif action == "type":
-                self.input_controller.click(center_x, center_y)
-                time.sleep(0.1)
-                self.input_controller.type_text(text_to_type)
-            elif action == "double_click":
-                self.input_controller.double_click(center_x, center_y)
-
+        elif action == "hotkey":
+            keys = task.get("keys", [])
+            self.input_controller.press_hotkey(*keys)
+            steps_log.append(f"Pressed hotkey {keys}")
             time.sleep(1.0)
+            return {"success": True, "steps": steps_log, "last_hash": None, "reason": None}
+            
+        elif action == "wait":
+            secs = task.get("seconds", 1.0)
+            time.sleep(secs)
+            steps_log.append(f"Waited {secs}s")
+            return {"success": True, "steps": steps_log, "last_hash": None, "reason": None}
 
-            post_capture = self.screen_capture.capture_screen()
-            if not post_capture:
-                continue
+        elif action == "direct_type":
+            # Type directly into the currently focused window — no visual targeting needed
+            text = task.get("text", "")
+            self.input_controller.safe_type(text)
+            steps_log.append(f"Typed '{text}' into active window")
+            time.sleep(0.5)
+            return {"success": True, "steps": steps_log, "last_hash": None, "reason": None}
 
-            # Verification based on frame hash diff
-            if capture["hash"] != post_capture["hash"]:
-                self.logger.info("Screen state changed after action. Verification success.")
-                return True
-            else:
-                self.logger.warning("Screen hash unchanged. Action might have failed.")
-        
-        return False
+        elif action == "direct_save_as":
+            # Save via Ctrl+S → type filepath → Enter, no visual targeting
+            filepath = task.get("filepath", "")
+            self.input_controller.press_hotkey("ctrl", "shift", "s")
+            time.sleep(1.5)
+            # Clear existing filename field & type new path
+            self.input_controller.press_hotkey("ctrl", "a")
+            time.sleep(0.3)
+            self.input_controller.safe_type(filepath)
+            time.sleep(0.5)
+            self.input_controller.press_hotkey("enter")
+            time.sleep(1.0)
+            # Handle "already exists" confirmation if it pops up
+            self.input_controller.press_hotkey("left")
+            time.sleep(0.3)
+            self.input_controller.press_hotkey("enter")
+            time.sleep(0.5)
+            steps_log.append(f"Saved file as '{filepath}'")
+            return {"success": True, "steps": steps_log, "last_hash": None, "reason": None}
+            
+        elif action in ("click", "type", "assert"):
+            max_attempts = task.get("max_attempts", 3)
+            same_hash_count = 0
+            
+            for attempt in range(max_attempts):
+                steps_log.append(f"Attempt {attempt+1}/{max_attempts}")
+                
+                # 1. Capture Before
+                cap_before = self.screen_capture.capture_screen()
+                if not cap_before:
+                    steps_log.append("Failed to capture screen.")
+                    return {"success": False, "steps": steps_log, "last_hash": last_hash, "reason": "CAPTURE_FAILED"}
+                
+                current_hash = cap_before["hash"]
+                if current_hash == last_hash:
+                    same_hash_count += 1
+                    if same_hash_count >= 3:
+                        steps_log.append("No progress detected. Screen stuck.")
+                        return {"success": False, "steps": steps_log, "last_hash": current_hash, "reason": "NO_PROGRESS"}
+                else:
+                    same_hash_count = 0
+                
+                last_hash = current_hash
+                
+                # target processing
+                target_info = task.get("target", {})
+                
+                # Locate target (Stub for structured locator strategy that will be expanded in next task)
+                # Strategy: UIA -> Visual -> OCR
+                
+                # For now, reuse old visual approach if target is text
+                text_target = target_info.get("text") or task.get("target_label")
+                target_el = None
+                
+                if text_target:
+                    analysis = self.screen_reader.analyze(cap_before, prompt=f"Find '{text_target}'")
+                    for el in analysis.get("elements", []):
+                        if text_target.lower() in el.get("label", "").lower():
+                            target_el = el
+                            break
+                
+                if not target_el:
+                    steps_log.append(f"Target '{text_target}' not found.")
+                    self._scroll_search()
+                    continue
+                
+                bbox = target_el["bbox"]
+                cx = int((bbox[0] + bbox[2]) / 2)
+                cy = int((bbox[1] + bbox[3]) / 2)
+                
+                # Execute action
+                if action == "click":
+                    self.input_controller.click(cx, cy)
+                elif action == "type":
+                    self.input_controller.click(cx, cy)
+                    time.sleep(0.5)
+                    self.input_controller.type_text(task.get("text", ""))
+                
+                time.sleep(1.0)
+                
+                # Verify
+                cap_after = self.screen_capture.capture_screen()
+                if cap_after and cap_after["hash"] != current_hash:
+                    steps_log.append("State changed visually. Success.")
+                    return {"success": True, "steps": steps_log, "last_hash": cap_after["hash"], "reason": None}
+                
+                steps_log.append("State did not change. Retrying.")
+                self._dismiss_common_popups()
+            
+            return {"success": False, "steps": steps_log, "last_hash": last_hash, "reason": "MAX_ATTEMPTS_EXCEEDED"}
+
+        return {"success": False, "steps": steps_log, "last_hash": None, "reason": "UNRECOGNIZED_ACTION"}

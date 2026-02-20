@@ -1,8 +1,14 @@
 llm:
-  active_provider: mock
+  active_provider: groq
   providers:
     mock:
       type: mock
+    groq:
+      type: groq
+      model: llama-3.3-70b-versatile
+    gemini:
+      type: gemini
+      model: gemini-2.0-flash
     openai:
       type: openai
       model: gpt-4o-mini
