@@ -1,9 +1,6 @@
 ![License](https://img.shields.io/github/license/abhinavmusrif/kinetic-os)
-
 ![Stars](https://img.shields.io/github/stars/abhinavmusrif/kinetic-os)
-
 ![Issues](https://img.shields.io/github/issues/abhinavmusrif/kinetic-os)
-
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 
 # Kinetic-OS: The Human-Kinetic Autonomous Operator
